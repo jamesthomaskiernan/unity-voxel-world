@@ -15,13 +15,13 @@ On a RTX 3090 at a resolution of 3840 x 2160, this implementations runs at ~450 
 ## Screenshots
 
 <p>Smaller world</p>
-<img src="./Screenshots/world_small.png" width="1066" height="600px">
+<img src="./Screenshots/world_small.png" height="600px">
 
 <p>Instant z scrolling through world layers</p>
-<img src="./Screenshots/scroll.gif" width="1066" height="600px">
+<img src="./Screenshots/scroll.gif" height="600px">
 
 <p>Grass shader and custom voxel type</p>
-<img src="./Screenshots/grass.gif" width="1066" height="600px">
+<img src="./Screenshots/grass.gif" height="600px">
 
 <p>Larger world sizes</p>
-<img src="./Screenshots/world_large.png" width="1066" height="600px">
+<img src="./Screenshots/world_large.png" height="600px">
