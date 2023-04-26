@@ -1,0 +1,297 @@
+#pragma kernel CSMain
+
+#include "Assets/Shaders/HLSL/Noise.hlsl"
+#include "Assets/Shaders/HLSL/WorldGeneration.hlsl"
+
+struct Tri
+{
+    float3 vertA;
+    float3 vertB;
+    float3 vertC;
+    float2 uvA;
+    float2 uvB;
+    float2 uvC;
+    float3 normal;
+};
+
+struct Obj
+{
+    int ObjNum;
+    int ModelNum;
+    int UVProfileNum;
+    int TexArrNum;
+    float2 TexAtlasPos;
+};
+
+//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+//!!!!!!!!!!!!!!! DONT FORGET TO PUT STATIC BEFORE CONSTS!!!!!!!!!!!!!!!
+//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+// Misc 
+uniform int CurrentLayer = 20;
+float4 CamPos;
+static double y_off = pow((2.0/3.0), .5);
+float3 Directions[6];
+
+// Texture Info
+static float2 TexAtlasTileDimensions = float2(16, 16);
+static float2 TexAtlasPixelDimensions = float2(1024, 1024);
+
+// Out Data
+AppendStructuredBuffer<Tri> Triangles;
+RWStructuredBuffer<int> Args;
+
+
+
+
+
+// Object Info
+RWStructuredBuffer<Obj> Objs;
+
+// Model Points
+static int ModelPointsMaxSize = 128;
+RWStructuredBuffer<float3> ModelPoints;
+
+// Model Triangles
+static int ModelTrianglesMaxSize = 128;
+RWStructuredBuffer<int> ModelTriangles;
+
+// Model Faces
+static int ModelFacesMaxSize = 14;
+RWStructuredBuffer<int> ModelFaces;
+
+// Model Adjacents
+static int ModelAdjacentsMaxSize = 48;
+RWStructuredBuffer<int> ModelAdjacents;
+
+// UV Profiles
+static int UVProfilesMaxSize = 128;
+RWStructuredBuffer<float2>UVProfiles;
+
+// Info for current object being rendered
+int ObjNum;
+int ModelNum;
+int UVProfileNum;
+int TexArrNum;
+float2 TexAtlasPos;
+
+
+
+
+
+float3 CalculateSurfaceNormal(Tri T)
+{
+	float3 U = T.vertB - T.vertA;
+	float3 V = T.vertC - T.vertA;
+
+    float3 vn = cross(U, V);
+    return normalize(vn);
+}
+
+
+
+// Could be named better
+bool IsModelTypeAnAdjacent(int ModelType, int AdjModelType, int Direction)
+{
+    int Index = ModelType * ModelAdjacentsMaxSize;
+    Index += (ModelAdjacentsMaxSize / 6) * Direction;
+    
+    bool IsAdjModelTypePresent = false;
+    
+    for (int x = 0; x < ModelAdjacentsMaxSize / 6; x++)
+    {
+        int Num = ModelAdjacents[Index];
+
+        // Checks to see if AdjModelType is there
+        if (Num == AdjModelType)
+        {
+            IsAdjModelTypePresent = true;
+            break;
+        }
+
+        // Stops according to -1 flag
+        else if (Num == -1)
+        {
+            break;
+        }
+    }
+        
+    return IsAdjModelTypePresent;
+}
+
+
+
+// Returns the requested point from the model
+float3 GetModelPoint(int ModelType, int PointNum)
+{
+    return ModelPoints[(ModelType * ModelPointsMaxSize) + PointNum];
+};
+
+
+// Returns the requested UV point for the object
+float2 GetPointUV(int UVProfile, int PointNum)
+{
+    return UVProfiles[(UVProfile * UVProfilesMaxSize) + PointNum];
+};
+
+// Returns the index where the faces start for a particular direction
+int GetModelFaceStart(int ModelType, int Direction)
+{
+    return ModelFaces[(ModelType * ModelFacesMaxSize) + (2 * Direction)];
+}
+
+// Returns the amount of faces present for a particular direction
+int GetModelFaceLength(int ModelType, int Direction)
+{
+    return ModelFaces[(ModelType * ModelFacesMaxSize) + (2 * Direction) + 1];
+}
+
+
+
+
+
+
+// Returns a float3, where each component is an int telling you which
+// points make the requested face for a given model E.G. float3(5, 21, 8)
+float3 GetModelTriangle(int ModelType, int TriangleNum)
+{
+    int Index = ModelType * ModelTrianglesMaxSize;
+    Index += TriangleNum * 3;
+    float3 Triangle;
+    Triangle.x = (int)ModelTriangles[Index];
+    Triangle.y = (int)ModelTriangles[Index + 1];
+    Triangle.z = (int)ModelTriangles[Index + 2];
+
+    return Triangle;
+};
+
+
+void FindDirections(float3 id)
+{
+    Directions[0] = float3(id.x - 1, id.y, id.z);
+    Directions[1] = float3(id.x + 1, id.y, id.z);
+    Directions[2] = float3(id.x, id.y - 1, id.z);
+    Directions[3] = float3(id.x, id.y + 1, id.z);
+    Directions[4] = float3(id.x, id.y, id.z - 1);
+    Directions[5] = float3(id.x, id.y, id.z + 1);
+}
+
+
+
+
+
+
+
+
+
+
+void AppendTriangle(int TriNum, float3 id)
+{
+    Tri TriToAppend = (Tri)0;
+    float3 Face = GetModelTriangle(ModelNum, TriNum);
+
+    // Sets the points for each vertex
+    TriToAppend.vertA = GetModelPoint(ModelNum, Face.x) + id;
+    TriToAppend.vertB = GetModelPoint(ModelNum, Face.y) + id;
+    TriToAppend.vertC = GetModelPoint(ModelNum, Face.z) + id;
+    
+    // Change verts to be shorter on y axis
+    TriToAppend.vertA.y *= (float)y_off;
+    TriToAppend.vertB.y *= (float)y_off;
+    TriToAppend.vertC.y *= (float)y_off;
+
+    // Sets the UVs for each point
+    TriToAppend.uvA = ((GetPointUV(UVProfileNum, Face.x) / 64.0) / TexAtlasTileDimensions) + TexAtlasPos * (64.0 / TexAtlasPixelDimensions);
+    TriToAppend.uvB = ((GetPointUV(UVProfileNum, Face.y) / 64.0) / TexAtlasTileDimensions) + TexAtlasPos * (64.0 / TexAtlasPixelDimensions);
+    TriToAppend.uvC = ((GetPointUV(UVProfileNum, Face.z) / 64.0) / TexAtlasTileDimensions) + TexAtlasPos * (64.0 / TexAtlasPixelDimensions);
+
+    // Calculate normals
+    float3 Norm = CalculateSurfaceNormal(TriToAppend);
+    TriToAppend.normal = Norm;
+    
+    // Append triangle to Triangles buffer
+    Triangles.Append(TriToAppend);
+}
+
+
+
+[numthreads(2, 2, 2)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{   
+
+    float3 Pos = float3(CamPos.x - 1, CamPos.y - 1, CamPos.z - 1);
+
+    // Offset similar to raycasting    
+    Pos.x += id.x + id.y;
+    Pos.z += id.z + id.y;
+    Pos.y -= id.y;
+    
+
+
+
+    int ObjType = FindObjAtPos(Pos);
+
+    // If object is present at position
+    if (ObjType != -1 && (int)Pos.y <= CurrentLayer)
+    {
+        FindDirections(Pos);
+
+        // Get info for this object
+        ObjNum = Objs[ObjType].ObjNum;
+        ModelNum = Objs[ObjType].ModelNum;
+        UVProfileNum = Objs[ObjType].UVProfileNum;
+        TexArrNum = Objs[ObjType].TexArrNum;
+        TexAtlasPos = Objs[ObjType].TexAtlasPos;
+
+
+        // Checks if totally encapsulated
+        int counter = 0;
+
+        // Loop through all directions
+        for (int Direction = 0; Direction < 6; Direction++)
+        {
+            int AdjacentObj = FindObjAtPos(Directions[Direction]);
+            int AdjacentModel = Objs[AdjacentObj].ModelNum;
+
+            
+            bool Autotile = IsModelTypeAnAdjacent(ModelNum, AdjacentModel, Direction);
+            
+            // If adjacent is air
+            // or if adjacent isn't an approved adjacent
+            // Then, Render entire face
+            if (AdjacentObj == -1 || !Autotile || (int)Pos.y == CurrentLayer && Direction == 3)
+            {
+                counter++;
+                int FaceStart = GetModelFaceStart(ModelNum, Direction);
+                int FaceLength = GetModelFaceLength(ModelNum, Direction);
+
+                if (FaceStart != -1)
+                {
+                    // Render all triangles in that face, according to the modelfacesbuffer
+                    for (int TriNum = FaceStart; TriNum < FaceStart + FaceLength; TriNum++)
+                    {
+                        AppendTriangle(TriNum, Pos);
+                    }
+                }
+            }
+        }
+
+        // If object is not completely encapsulated by adjacent objects
+        // if (counter == 6)
+        // {
+            // Get faces which are always rendered
+            int FaceStart = GetModelFaceStart(ModelNum, 6);
+            int FaceLength = GetModelFaceLength(ModelNum, 6);
+
+            // Checks to make sure the "ALWAYS" faces exist
+            if (FaceStart != -1)
+            {
+                for (int TriNum = FaceStart; TriNum < FaceStart + FaceLength; TriNum++)
+                {
+                    AppendTriangle(TriNum, Pos);
+                }
+            }
+        // }
+    }
+}
+

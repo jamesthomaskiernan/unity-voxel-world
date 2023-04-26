@@ -1,0 +1,160 @@
+// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel CSMain
+
+struct Tri
+{
+    float3 vertA;
+    float3 vertB;
+    float3 vertC;
+    float2 uvA;
+    float2 uvB;
+    float2 uvC;
+    float3 normal;
+};
+
+uniform int CurrentLayer;
+
+#include "Assets/Shaders/HLSL/Noise.hlsl"
+
+int FindObjAtPos(float3 Pos)
+{
+    if (Pos.y == 1 || Pos.y == 0)
+    {
+        return 0;
+    }
+
+	if (Pos.y == -1)
+	{
+		return 1;
+	}
+
+
+	float NoiseDefinition = 50.0;
+
+	float noisey = SimplexNoise(Pos / NoiseDefinition);
+
+    noisey -= Pos.y/30.0;
+
+	if (noisey > 0)
+	{
+
+		return 0;
+		
+	}
+	else
+	{
+		return -1;
+	}
+}
+
+
+
+AppendStructuredBuffer<Tri> Triangles;
+RWStructuredBuffer<int> Args;
+
+
+float3 CalculateSurfaceNormal(Tri T)
+{
+	float3 U = T.vertB - T.vertA;
+	float3 V = T.vertC - T.vertA;
+
+    float3 vn = cross(U, V);
+    return normalize(vn);
+}
+
+uniform float GrassWidth = .25;
+uniform float GrassHeight = .1;
+uniform float Test = 1.0f;
+uniform sampler2D Noise;
+
+
+float2 RotatePoint(float PivotX, float PivotY, float Angle, float2 Point)
+{
+  float s = sin(Angle);
+  float c = cos(Angle);
+
+  // translate point back to origin:
+  Point.x -= PivotX;
+  Point.y -= PivotY;
+
+  // rotate point
+  float xnew = Point.x * c - Point.y * s;
+  float ynew = Point.x * s + Point.y * c;
+
+  // translate point back:
+  Point.x = xnew + PivotX;
+  Point.y = ynew + PivotY;
+  return Point;
+}
+
+
+float rand(float2 uv)
+{
+    float2 noise = (frac(sin(dot(uv ,float2(12.9898,78.233)*2.0)) * 43758.5453));
+    return abs(noise.x + noise.y) * 0.5;
+}
+
+
+static double y_off = pow((2.0/3.0), .5);
+
+
+[numthreads(32, 1, 32)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+
+
+
+    float x = (float)id.x * Test;
+    float z = (float)id.z * Test;
+
+
+    float3 Pos = float3((int)x, id.y, (int)z);
+
+
+    int ObjType = FindObjAtPos(Pos);
+    int AboveType = FindObjAtPos(float3(Pos.x, Pos.y + 1, Pos.z));
+
+    if (ObjType == 0 && AboveType == -1 && Pos.y <= CurrentLayer)
+    {
+        Tri TriToAppend = (Tri)0;
+        
+
+
+        float3 vertA = float3((float)id.x * Test - .5, Pos.y * (float)y_off + .5 * (float)y_off, (float)id.z * Test - .5);
+        float3 vertB = float3(vertA.x - GrassWidth, vertA.y, vertA.z);
+        vertB.xz = RotatePoint(vertA.x, vertA.z, rand(float2(id.x, id.z)) * 100, vertB.xz);
+        
+        float3 vertC = float3(0,0,0);
+        vertC = vertA + float3(0, GrassHeight, 0);
+
+        vertC.x = (vertA.x + vertB.x) / 2.0;
+        vertC.z = (vertA.z + vertB.z) / 2.0;
+
+
+
+        TriToAppend.vertA = vertA;
+        TriToAppend.vertB = vertB;
+        TriToAppend.vertC = vertC;
+
+        TriToAppend.uvA = float2(0,0);
+        TriToAppend.uvB = float2(0,0);
+        TriToAppend.uvC = float2(0,1);
+
+        TriToAppend.normal = CalculateSurfaceNormal(TriToAppend);
+
+
+        Triangles.Append(TriToAppend);
+        
+        InterlockedAdd(Args[0], 3);
+
+
+        float3 Holder = TriToAppend.vertA;
+        TriToAppend.vertA = TriToAppend.vertB;
+        TriToAppend.vertB = Holder;
+        
+        // TriToAppend.normal = CalculateSurfaceNormal(TriToAppend);
+
+        // Triangles.Append(TriToAppend);
+        // InterlockedAdd(Args[0], 3);
+    }
+}
